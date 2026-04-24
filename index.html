@@ -347,7 +347,8 @@
             });
             await batch.commit();
             console.log(`Sincronización de ${type} completada en la nube.`);
-            loadDayData(); // Recarga visual para confirmar el cambio
+            loadDayData(); // Recarga visual en pantalla
+            fetchAllData(); // <--- ESTO ARREGLA EL PDF: Actualiza la memoria global
         }
     }
 
