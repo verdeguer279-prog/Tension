@@ -65,7 +65,10 @@
 
 <header>
     <h1>Control Tensión Arterial</h1>
-    <p>Registro Personal de Salud</p>
+    <p>
+        Registro Personal de Salud 
+        <span id="appVersion" style="background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 8px; font-weight: bold;">Calculando...</span>
+    </p>
 </header>
 
 <div class="container">
@@ -84,7 +87,7 @@
         <div class="grid-3">
             <div>
                 <label>Hora Pastilla:</label>
-                <input type="time" id="medActualTime" value="13:15" onchange="updateDayMedTime()">
+                <input type="time" id="medActualTime" onchange="updateMedTimeGlobal(this.value)">
             </div>
             <div id="gymBtn" class="activity-btn" onclick="toggleActivity('gym')">🏋️ Gym</div>
             <div id="workBtn" class="activity-btn" onclick="toggleActivity('work')">👮 Trabajo</div>
@@ -176,6 +179,12 @@
     }
 
     function init() {
+        autoVersion(); // Carga la versión
+        
+        // Lee la hora de la pastilla guardada (o pone 13:15 por defecto)
+        const savedPillTime = localStorage.getItem('globalPillTime') || "13:15";
+        document.getElementById('medActualTime').value = savedPillTime;
+        
         updateDateDisplay();
         setDefaultTimes();
         fetchAllData(); 
@@ -265,11 +274,16 @@
 
     async function saveData() {
         const timestamp = new Date().getTime();
-        const docId = timestamp.toString(); 
         const dateStr = currentDate.toISOString().split('T')[0];
         
         const newMedTime = document.getElementById('medActualTime').value;
         const currentTime2 = document.getElementById('time2').value;
+        
+        // ---------------------------------------------------------
+        // AQUÍ ESTÁ EL CAMBIO: ID DEL DOCUMENTO = FECHA_HORA
+        // Ejemplo de cómo se guardará en Firebase: "2026-04-24_10:45"
+        // ---------------------------------------------------------
+        const docId = `${dateStr}_${currentTime2}`; 
         
         // Al guardar, comprueba automáticamente si es una medición previa a la pastilla
         const pillTimeToSave = (currentTime2 >= newMedTime) ? newMedTime : "13:15";
@@ -285,7 +299,7 @@
             time2: currentTime2,
             gym: activities.gym,
             work: activities.work,
-            timestamp: timestamp
+            timestamp: timestamp // Mantenemos el timestamp dentro de los datos para la ordenación matemática
         };
 
         if(!data.sys2 || !data.dia2) return alert("Faltan los datos de la 2ª toma (Válida)");
@@ -311,8 +325,17 @@
             let docs = [];
             snap.forEach(doc => docs.push(doc.data()));
             
-            // Usamos la función de ordenación estricta para que la hora más tardía salga arriba
-            docs = sortDataDescending(docs);
+            // ORDENACIÓN: El más reciente arriba
+            docs.sort((a, b) => {
+                if (a.date !== b.date) return a.date > b.date ? -1 : 1;
+                return a.time2 > b.time2 ? -1 : 1;
+            });
+            
+            // RECUPERAR ESTADO: Leemos el último registro y lo ponemos en los botones
+            const lastEntry = docs[0];
+            activities.gym = lastEntry.gym;
+            activities.work = lastEntry.work;
+            document.getElementById('medActualTime').value = lastEntry.medTime;
             
             let html = "";
             docs.forEach(d => {
@@ -330,7 +353,7 @@
                         </div>
                         <div style="margin-top:6px; font-size:0.9rem;">
                             <strong>Pulso:</strong> ${d.pulso} lpm<br>
-                            <strong>💊 Pastilla:</strong> ${d.medTime} <span style="background:#fef08a; padding:2px 6px; border-radius:4px; font-size:0.8rem;">(hace ${diff.texto})</span>
+                            <span style="background:#fef08a; padding:3px 8px; border-radius:6px; font-size:0.85rem; font-weight:bold; color:#1e293b; display:inline-block; margin-bottom:4px; margin-top:4px;">💊 ${diff.texto} después de medicación</span>
                         </div>
                         <div style="margin-top:8px; font-size:0.85rem;">
                             ${d.gym ? '🏋️ Gym: SÍ' : '<span class="tachado">🏋️ Gym: NO</span>'} | 
@@ -340,8 +363,15 @@
             });
             list.innerHTML = html;
         } else {
+            // SI NO HAY REGISTROS HOY: Calculamos valores por defecto
+            const day = currentDate.getDay();
+            const week = getWeekNumber(currentDate);
+            activities.gym = (day >= 1 && day <= 5);
+            activities.work = (week % 2 === 0);
+            
             list.innerHTML = "<p style='color:#94a3b8; text-align:center; padding: 20px 0;'>No hay registros para este día.</p>";
         }
+        refreshActivityUI(); // Actualiza los colores de los botones
     }
 
     async function fetchAllData() {
@@ -389,7 +419,7 @@
 
         doc.autoTable({
             startY: 35, 
-            head: [['Fecha', 'Hora', 'Tensión', 'Pulso', 'Pill', 'Post-Pill', 'Gym', 'Trabajo']],
+            head: [['Fecha', 'Hora', 'Tensión', 'Pulso', 'Medic.', 'Post-Medic.', 'Gym', 'Trabajo']],
             body: rows,
             headStyles: { fillColor: [30, 58, 138] },
             styles: { fontSize: 8 }
@@ -480,7 +510,34 @@
         document.getElementById('contextInsight').innerHTML = `🔍 <strong>Análisis:</strong> Los días de trabajo tu tensión sistólica media ${textoTrabajo} respecto a tus días de descanso.`;
     }
 
-    window.onload = init;
+    // AUTOGENERADOR DE VERSIÓN (Basado en la fecha de guardado)
+    function autoVersion() {
+        const lastMod = new Date(document.lastModified);
+        const dia = lastMod.getDate();
+        const hora = lastMod.getHours().toString().padStart(2, '0');
+        const min = lastMod.getMinutes().toString().padStart(2, '0');
+        
+        // Formato: V + Día + . + HoraMinuto (Ej: V24.1645)
+        document.getElementById('appVersion').innerText = `V${dia}.${hora}${min}`;
+    }
+    // 1. Guardar hora de pastilla en el navegador
+    function updateMedTimeGlobal(val) {
+        localStorage.setItem('globalPillTime', val);
+        updateDayMedTime(); // Actualiza los registros de hoy si cambias la hora
+    }
+
+    // 2. Generador de versión automática
+    function autoVersion() {
+        const lastMod = new Date(document.lastModified);
+        const dia = lastMod.getDate().toString().padStart(2, '0');
+        const hora = lastMod.getHours().toString().padStart(2, '0');
+        const min = lastMod.getMinutes().toString().padStart(2, '0');
+        document.getElementById('appVersion').innerText = `V${dia}.${hora}${min}`;
+    }
+    window.onload = () => {
+        init();
+        autoVersion();
+    };
 
     // REGISTRO SIMPLE PARA REPOSITORIO NUEVO
     if ('serviceWorker' in navigator) {
