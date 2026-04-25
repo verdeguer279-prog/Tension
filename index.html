@@ -157,6 +157,8 @@
         .btn-stats { background: var(--p-light); color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2); margin-bottom: 20px; }
         .btn-pdf { background: #334155; color: white; }
         .btn-json { background: #0ea5e9; color: white; }
+        .btn-outline { background: transparent; border: 1px solid var(--p); color: var(--p); padding: 8px; border-radius: 6px; flex: 1; }
+        .btn-outline.active-tab { background: var(--p); color: white; }
 
         .badge-status { 
             padding: 5px 12px; 
@@ -186,12 +188,17 @@
         }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* Modales */
-        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(15, 23, 42, 0.8); backdrop-filter: blur(8px); }
-        .modal-content { background-color: var(--bg); margin: 0; padding: 25px; min-height: 100%; width: 100%; overflow-y: auto; }
-        @media(min-width: 600px) { .modal-content { margin: 30px auto; min-height: auto; height: 90vh; width: 90%; max-width: 850px; border-radius: 25px; } }
+        /* Modales y Estadísticas */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(15, 23, 42, 0.8); backdrop-filter: blur(8px); overflow-y: auto;}
+        .modal-content { background-color: var(--bg); margin: 0; padding: 25px; min-height: 100%; width: 100%; }
+        @media(min-width: 600px) { .modal-content { margin: 30px auto; min-height: auto; width: 90%; max-width: 850px; border-radius: 25px; } }
         
         .close-btn { color: #ef4444; float: right; font-size: 32px; font-weight: 800; cursor: pointer; line-height: 0.8; }
+        
+        .stat-box { background: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+        .stat-box h4 { margin: 0 0 10px 0; color: var(--p); border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        canvas { width: 100% !important; max-height: 250px; }
+        .insights { font-size: 0.85rem; color: #475569; margin-top: 10px; line-height: 1.4; }
     </style>
 </head>
 <body>
@@ -263,9 +270,28 @@
 <div id="statsModal" class="modal">
     <div class="modal-content">
         <span class="close-btn" onclick="closeStatsModal()">&times;</span>
-        <h2 style="color: var(--p); margin: 0 0 20px 0;">Análisis de Datos</h2>
-        <div id="statsContainer">
-            <p style="color:#64748b">Cargando análisis detallado...</p>
+        <h2 style="color: var(--p); margin-top: 0;">Análisis de Datos</h2>
+        <p style="font-size: 0.8rem; color: #64748b; margin-top: -10px;">La precisión aumenta con cada registro guardado.</p>
+
+        <div style="display: flex; gap: 5px; margin-bottom: 15px;">
+            <button class="btn-outline active-tab" id="tab7" onclick="renderTrendChart(7)">7 Días</button>
+            <button class="btn-outline" id="tab30" onclick="renderTrendChart(30)">Mes</button>
+            <button class="btn-outline" id="tab365" onclick="renderTrendChart(365)">Año</button>
+        </div>
+
+        <div class="stat-box">
+            <h4>📈 Curva de Tensión</h4>
+            <canvas id="trendChart"></canvas>
+        </div>
+        <div class="stat-box">
+            <h4>⏰ Análisis por Franja Horaria</h4>
+            <canvas id="timeChart"></canvas>
+            <div id="timeInsight" class="insights">Calculando picos de tensión...</div>
+        </div>
+        <div class="stat-box">
+            <h4>⚖️ Impacto: Trabajo y Deporte</h4>
+            <canvas id="contextChart"></canvas>
+            <div id="contextInsight" class="insights">Comparando medias...</div>
         </div>
     </div>
 </div>
@@ -287,13 +313,13 @@
     let currentDate = new Date();
     let activities = { gym: false, work: false };
     let globalData = [];
-    let charts = [];
+    let charts = { trend: null, time: null, context: null };
 
     // 3. INICIALIZACIÓN
     function init() {
         autoVersion();
         
-        // Cargar hora de pastilla global de la memoria
+        // Cargar hora de pastilla global de la memoria del móvil/PC
         const savedPillTime = localStorage.getItem('globalPillTime') || "13:15";
         document.getElementById('medActualTime').value = savedPillTime;
         
@@ -326,16 +352,13 @@
         updateDateDisplay();
     }
 
-    // MODIFICACIÓN QUIRÚRGICA: Toggle con persistencia inmediata
     async function toggleActivity(type) {
         activities[type] = !activities[type];
         
         const dateStr = currentDate.toISOString().split('T')[0];
         
-        // Guardamos la preferencia manual para este día en LocalStorage (Memoria Local)
-        // Esto evita que al refrescar sin datos guardados, el cálculo automático gane.
+        // Guardar preferencia manual para el día seleccionado en LocalStorage
         localStorage.setItem(`override_${type}_${dateStr}`, activities[type]);
-        
         refreshActivityUI();
 
         // PERSISTENCIA EN FIREBASE: Si ya hay registros hoy, actualizarlos todos en bloque
@@ -347,8 +370,9 @@
             });
             await batch.commit();
             console.log(`Sincronización de ${type} completada en la nube.`);
-            loadDayData(); // Recarga visual en pantalla
-            fetchAllData(); // <--- ESTO ARREGLA EL PDF: Actualiza la memoria global
+            
+            loadDayData(); // Recarga la UI
+            fetchAllData(); // Actualiza la memoria global para que el PDF se entere al instante
         }
     }
 
@@ -376,7 +400,7 @@
                 return a.time2 > b.time2 ? -1 : 1;
             });
             
-            // Recuperar el estado de los botones del último registro guardado
+            // Recuperar el estado de los botones y pastilla del último registro guardado
             const last = docs[0];
             activities.gym = last.gym;
             activities.work = last.work;
@@ -440,10 +464,13 @@
     async function saveData() {
         const dateStr = currentDate.toISOString().split('T')[0];
         const currentTime2 = document.getElementById('time2').value;
+        
+        // FORMATO DE ID PROFESIONAL: 2026-04-24_10:45
         const docId = `${dateStr}_${currentTime2}`;
         
         const medTime = document.getElementById('medActualTime').value;
-        // Lógica de pastilla: si la toma es antes de la pastilla de hoy, se usa la de ayer (13:15)
+        
+        // Lógica de pastilla inteligente
         const pillToSave = (currentTime2 >= medTime) ? medTime : "13:15";
 
         const data = {
@@ -465,7 +492,7 @@
         try {
             await db.collection("registros_tension").doc(docId).set(data);
             
-            // Limpieza
+            // Limpieza visual
             document.getElementById('sys1').value = '';
             document.getElementById('dia1').value = '';
             document.getElementById('sys2').value = '';
@@ -480,10 +507,10 @@
         }
     }
 
-    // 8. FUNCIONES DE APOYO
+    // 8. FUNCIONES DE APOYO (Matemáticas y formato)
     function updateMedTimeGlobal(val) {
         localStorage.setItem('globalPillTime', val);
-        updateDayMedTime(); // Función de reconversión si existen registros
+        updateDayMedTime(); 
     }
 
     async function updateDayMedTime() {
@@ -500,6 +527,7 @@
         });
         await batch.commit();
         loadDayData();
+        fetchAllData(); // Avisar a la memoria global
     }
 
     function calculateTimeDifference(tMed, tToma) {
@@ -523,12 +551,17 @@
         return Math.ceil((((d - new Date(Date.UTC(d.getUTCFullYear(),0,1))) / 86400000) + 1)/7);
     }
 
-    // 9. EXPORTACIÓN Y PDF
+    // 9. EXPORTACIÓN (JSON y PDF)
     async function fetchAllData() {
         const snap = await db.collection("registros_tension").get();
         globalData = [];
         snap.forEach(s => globalData.push(s.data()));
-        globalData.sort((a, b) => a.date + a.time2 > b.date + b.time2 ? -1 : 1);
+        
+        // Ordenación: Más reciente primero
+        globalData.sort((a, b) => {
+            if (a.date !== b.date) return a.date > b.date ? -1 : 1;
+            return a.time2 > b.time2 ? -1 : 1;
+        });
     }
 
     async function generatePDF() {
@@ -569,22 +602,106 @@
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(globalData, null, 2));
         const downloadAnchorNode = document.createElement('a');
         downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", "tension_backup.json");
+        downloadAnchorNode.setAttribute("download", `tension_backup_${new Date().toISOString().split('T')[0]}.json`);
         document.body.appendChild(downloadAnchorNode);
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
     }
 
-    // 10. MODAL Y ESTADÍSTICAS
+    // 10. MODAL Y ESTADÍSTICAS CHART.JS
     function openStatsModal() {
+        if(globalData.length === 0) return alert("Aún no hay suficientes datos.");
         document.getElementById('statsModal').style.display = 'block';
-        // Aquí podrías llamar a funciones de Chart.js si las tienes implementadas
-    }
-    function closeStatsModal() {
-        document.getElementById('statsModal').style.display = 'none';
+        document.body.style.overflow = 'hidden'; 
+        renderTrendChart(7);
+        renderTimeAnalysis();
+        renderContextAnalysis();
     }
 
-    // ARRANQUE
+    function closeStatsModal() {
+        document.getElementById('statsModal').style.display = 'none';
+        document.body.style.overflow = 'auto';
+    }
+
+    function renderTrendChart(daysFilter) {
+        document.querySelectorAll('.btn-outline').forEach(b => b.classList.remove('active-tab'));
+        document.getElementById(`tab${daysFilter}`).classList.add('active-tab');
+        const now = new Date().getTime();
+        
+        // Invertimos la tabla solo para el gráfico para que vaya de izquierda a derecha (pasado a presente)
+        const filtered = globalData.filter(d => (now - d.timestamp) <= (daysFilter * 24 * 60 * 60 * 1000)).slice().reverse();
+        
+        if(charts.trend) charts.trend.destroy();
+        charts.trend = new Chart(document.getElementById('trendChart'), {
+            type: 'line',
+            data: {
+                labels: filtered.map(d => d.date.split('-').slice(1).reverse().join('/') + ' ' + d.time2),
+                datasets: [
+                    { label: 'Sistólica', data: filtered.map(d => d.sys2), borderColor: '#ef4444', tension: 0.3, pointRadius: 3 },
+                    { label: 'Diastólica', data: filtered.map(d => d.dia2), borderColor: '#3b82f6', tension: 0.3, pointRadius: 3 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    function renderTimeAnalysis() {
+        let blocks = { "Mañana (06-12)": { s:0, d:0, c:0 }, "Tarde (12-18)": { s:0, d:0, c:0 }, "Noche (18-06)": { s:0, d:0, c:0 } };
+        globalData.forEach(d => {
+            const h = parseInt(d.time2.split(':')[0]);
+            let b = (h >= 6 && h < 12) ? "Mañana (06-12)" : (h >= 12 && h < 18) ? "Tarde (12-18)" : "Noche (18-06)";
+            blocks[b].s += d.sys2; blocks[b].d += d.dia2; blocks[b].c++;
+        });
+
+        const labels = Object.keys(blocks);
+        const sysAvg = labels.map(l => blocks[l].c ? (blocks[l].s / blocks[l].c).toFixed(1) : 0);
+        const diaAvg = labels.map(l => blocks[l].c ? (blocks[l].d / blocks[l].c).toFixed(1) : 0);
+
+        if(charts.time) charts.time.destroy();
+        charts.time = new Chart(document.getElementById('timeChart'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [ { label: 'Sistólica Media', data: sysAvg, backgroundColor: 'rgba(239, 68, 68, 0.7)' }, { label: 'Diastólica Media', data: diaAvg, backgroundColor: 'rgba(59, 130, 246, 0.7)' } ] },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+        
+        let maxSys = Math.max(...sysAvg.filter(v => v > 0));
+        let franjaAlta = labels[sysAvg.indexOf(maxSys.toFixed(1))];
+        if(maxSys > 0) document.getElementById('timeInsight').innerHTML = `🔍 <strong>Patrón detectado:</strong> Tu tensión suele ser más alta en la franja de <strong>${franjaAlta}</strong> (Media: ${maxSys}).`;
+    }
+
+    function renderContextAnalysis() {
+        let stats = { work: { s:0, d:0, c:0 }, noWork: { s:0, d:0, c:0 }, gym: { s:0, d:0, c:0 }, noGym: { s:0, d:0, c:0 } };
+        globalData.forEach(d => {
+            if(d.work) { stats.work.s += d.sys2; stats.work.d += d.dia2; stats.work.c++; } else { stats.noWork.s += d.sys2; stats.noWork.d += d.dia2; stats.noWork.c++; }
+            if(d.gym) { stats.gym.s += d.sys2; stats.gym.d += d.dia2; stats.gym.c++; } else { stats.noGym.s += d.sys2; stats.noGym.d += d.dia2; stats.noGym.c++; }
+        });
+
+        const getAvg = (obj, key) => obj.c > 0 ? (obj[key] / obj.c).toFixed(1) : 0;
+        if(charts.context) charts.context.destroy();
+        charts.context = new Chart(document.getElementById('contextChart'), {
+            type: 'radar',
+            data: {
+                labels: ['Trabajo (SÍ)', 'Trabajo (NO)', 'Gimnasio (SÍ)', 'Gimnasio (NO)'],
+                datasets: [ { label: 'Media Sistólica', data: [getAvg(stats.work,'s'), getAvg(stats.noWork,'s'), getAvg(stats.gym,'s'), getAvg(stats.noGym,'s')], borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.2)' } ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { r: { min: 100 } } }
+        });
+
+        let diffTrabajo = (getAvg(stats.work,'s') - getAvg(stats.noWork,'s')).toFixed(1);
+        let textoTrabajo = diffTrabajo > 0 ? `sube <strong>${diffTrabajo} puntos</strong>` : `baja <strong>${Math.abs(diffTrabajo)} puntos</strong>`;
+        document.getElementById('contextInsight').innerHTML = `🔍 <strong>Análisis:</strong> Los días de trabajo tu tensión sistólica media ${textoTrabajo} respecto a tus días de descanso.`;
+    }
+
+    // REGISTRO DEL SERVICE WORKER
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('App Tensión lista'))
+                .catch(err => console.error('Error Service Worker:', err));
+        });
+    }
+
+    // ARRANQUE DE LA APP
     window.onload = init;
 </script>
 </body>
